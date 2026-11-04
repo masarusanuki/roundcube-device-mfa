@@ -1,0 +1,25 @@
+<?php
+// Copy to <roundcube config dir>/device_mfa.inc.php (e.g. /etc/roundcubemail/device_mfa.inc.php)
+// /etc/roundcubemail/device_mfa.inc.php などにコピーして編集してください
+
+// Networks from which a new device may be registered (e.g. the internal network or its NAT address).
+// Access from other addresses follows device_mfa_outside_mode below.
+// 端末の「初回登録」を許可するネットワーク（院内の LAN や、外に出るときの NAT のアドレスなど）。
+// ここに含まれない IP からのアクセスは、下の device_mfa_outside_mode に従います。
+$config['device_mfa_register_networks'] = [
+    // '192.0.2.0/24',
+    // '10.0.0.0/8',
+];
+
+// Devices not used for this many days are treated as unregistered (0 = never expire)
+// この日数使われなかった端末は無効扱い（0 = 無期限）
+$config['device_mfa_expire_days'] = 180;
+
+// Cookie that holds the device id / 端末IDを保持する Cookie の名前
+$config['device_mfa_cookie_name'] = 'rc_device_mfa';
+
+// Access from outside device_mfa_register_networks / 登録許可ネットワークの外からのアクセスの扱い
+//  'idp'  : skip the device check and rely on the identity provider's MFA (e.g. Entra ID Conditional Access)
+//           端末確認を行わず、Microsoft Entra ID の多要素認証（条件付きアクセス）に任せる
+//  'deny' : only registered devices are allowed / 登録済み端末のみ許可（未登録なら拒否）
+$config['device_mfa_outside_mode'] = 'idp';
