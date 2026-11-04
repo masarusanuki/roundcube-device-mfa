@@ -59,7 +59,7 @@ class device_mfa extends rcube_plugin
     /** Right after login: always start unverified / ログイン直後は必ず未確認から始める */
     public function login_after($args)
     {
-        unset($_SESSION[self::SESS_OK], $_SESSION[self::SESS_CHALLENGE], $_SESSION[self::SESS_PENDING], $_SESSION[self::SESS_WA_REG]);
+        $this->sess_remove(self::SESS_OK, self::SESS_CHALLENGE, self::SESS_PENDING, self::SESS_WA_REG);
         return $args;
     }
 
@@ -167,7 +167,7 @@ class device_mfa extends rcube_plugin
     private function take_challenge($purpose)
     {
         $chal = $_SESSION[self::SESS_CHALLENGE] ?? null;
-        unset($_SESSION[self::SESS_CHALLENGE]);
+        $this->sess_remove(self::SESS_CHALLENGE);
 
         if (!is_array($chal) || ($chal['purpose'] ?? '') !== $purpose || time() - (int) $chal['ts'] > self::CHALLENGE_TTL) {
             $this->json_out(400, ['status' => 'retry', 'message' => $this->gettext('err_expired')]);
@@ -297,12 +297,12 @@ class device_mfa extends rcube_plugin
         $row = $id ? $db->fetch_assoc($res) : null;
 
         if (!$row || $row['device_id'] !== $device_id || (int) $row['revoked']) {
-            unset($_SESSION[self::SESS_PENDING]);
+            $this->sess_remove(self::SESS_PENDING);
             $this->json_out(200, ['status' => 'denied', 'message' => $this->gettext('err_not_approved')]);
         }
 
         if ($row['status'] === 'active') {
-            unset($_SESSION[self::SESS_PENDING]);
+            $this->sess_remove(self::SESS_PENDING);
             $this->mark_ok();
             $this->log("approved device in use user_id={$user_id} device={$row['id']}");
             $this->json_out(200, ['status' => 'ok', 'redirect' => $this->rc->url(['_task' => 'mail'])]);
@@ -310,7 +310,7 @@ class device_mfa extends rcube_plugin
 
         if (!(int) $row['fresh']) {
             $db->query('UPDATE ' . $this->table() . ' SET revoked = 1 WHERE id = ?', $row['id']);
-            unset($_SESSION[self::SESS_PENDING]);
+            $this->sess_remove(self::SESS_PENDING);
             $this->json_out(200, ['status' => 'denied', 'message' => $this->gettext('err_pending_expired')]);
         }
 
@@ -366,7 +366,7 @@ class device_mfa extends rcube_plugin
         $W       = 'device_mfa_webauthn';
 
         $chal = $_SESSION[self::SESS_WA_REG] ?? null;
-        unset($_SESSION[self::SESS_WA_REG]);
+        $this->sess_remove(self::SESS_WA_REG);
         if (!is_array($chal) || time() - (int) $chal['ts'] > self::CHALLENGE_TTL) {
             $this->json_out(400, ['status' => 'retry', 'message' => $this->gettext('err_expired')]);
         }
@@ -704,6 +704,21 @@ class device_mfa extends rcube_plugin
     // ------------------------------------------------------------------
     // Session / Cookie / WebAuthn parameters
     // ------------------------------------------------------------------
+
+    /**
+     * Removes a session value so that it stays removed. Roundcube merges the saved session with the
+     * old one, so a plain unset() would come back; rcube_session::remove() registers the removal.
+     * セッションの値を確実に消す（Roundcube は保存時に前の内容と合成するため、unset だけでは復活する）。
+     */
+    private function sess_remove(...$keys)
+    {
+        foreach ($keys as $key) {
+            if (!empty($this->rc->session)) {
+                $this->rc->session->remove($key);
+            }
+            unset($_SESSION[$key]);
+        }
+    }
 
     /** The "verified" flag is bound to this session / 確認済みフラグをこのセッションに結び付ける */
     private function session_binding()
