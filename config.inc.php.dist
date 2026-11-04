@@ -19,7 +19,14 @@ $config['device_mfa_expire_days'] = 180;
 $config['device_mfa_cookie_name'] = 'rc_device_mfa';
 
 // Access from outside device_mfa_register_networks / 登録許可ネットワークの外からのアクセスの扱い
-//  'idp'  : skip the device check and rely on the identity provider's MFA (e.g. Entra ID Conditional Access)
-//           端末確認を行わず、Microsoft Entra ID の多要素認証（条件付きアクセス）に任せる
-//  'deny' : only registered devices are allowed / 登録済み端末のみ許可（未登録なら拒否）
-$config['device_mfa_outside_mode'] = 'idp';
+//  'deny' (default): only registered devices are allowed; new devices cannot be registered from outside.
+//         Use this if your users sign in with a normal password (no Office 365 / identity provider MFA).
+//         既定。外からは登録済みの端末だけ許可し、新しい端末は登録できない。
+//         普通のパスワードでログインする環境（Office 365 などの多要素認証がない環境）では、必ずこちらにする。
+//  'idp'  : skip the device check outside and rely on the identity provider's MFA.
+//         Only if users sign in through an identity provider that enforces MFA outside your network
+//         (e.g. Office 365 OAuth + Entra ID Conditional Access). Otherwise outside access is password-only.
+//         外では端末確認をせず、ID プロバイダーの多要素認証に任せる。Office 365 の OAuth ログインで、
+//         Entra ID の条件付きアクセスにより外からは多要素認証を求めている場合だけ使う。
+//         そうでない環境で 'idp' にすると、外からはパスワードだけで入れてしまう。
+$config['device_mfa_outside_mode'] = 'deny';

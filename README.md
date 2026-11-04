@@ -18,20 +18,42 @@ The device check is switched **on or off by the client's IP address**:
 | Client IP | Device check | Second check done by |
 |---|---|---|
 | inside `device_mfa_register_networks` (e.g. the hospital LAN) | **ON** — confirmation page, register / verify the device | this plugin (network + device key) |
-| outside, `device_mfa_outside_mode = 'idp'` (default) | **OFF** — no confirmation page | the identity provider's MFA (e.g. Entra ID Conditional Access) |
-| outside, `device_mfa_outside_mode = 'deny'` | **ON** — only registered devices; new registration refused | this plugin (device key) |
+| outside, `device_mfa_outside_mode = 'deny'` (default) | **ON** — only registered devices; new registration refused | this plugin (device key) |
+| outside, `device_mfa_outside_mode = 'idp'` | **OFF** — no confirmation page | the identity provider's MFA (e.g. Entra ID Conditional Access) |
 
 The client IP is `REMOTE_ADDR`, or `X-Forwarded-For` only when the request comes from a proxy listed in `proxy_whitelist`.
+
+## Do I need Office 365?
+
+**No.** This plugin does not use Office 365 at all. It runs after any Roundcube login — a normal
+IMAP password login (Dovecot, Postfix, …) works the same way. It was developed on a Roundcube that
+signs in with Office 365, which is the only reason Office 365 is mentioned here.
+
+Choose `device_mfa_outside_mode` by how your users sign in:
+
+| How users sign in | `device_mfa_outside_mode` | Result outside the allowed networks |
+|---|---|---|
+| Normal password (no identity provider) — **most installations** | **`'deny'`** (default) | only devices registered inside can log in; password alone is not enough |
+| Office 365 / another identity provider that **enforces MFA outside** your network (e.g. Entra ID Conditional Access) | `'idp'` | no device check; the identity provider's MFA is the second check |
+
+> With `'idp'` but **no MFA at the identity provider**, access from outside is protected by the password only.
+> Roundcube cannot see whether the identity provider performed MFA, so only use `'idp'` when you are sure it does.
+
+Typical flow for a password-only installation:
+1. Set `device_mfa_register_networks` to your internal network (and its NAT address if Roundcube sees that).
+2. Users log in once **from inside** and press "Yes" — the browser is registered.
+3. From then on that browser can also log in from outside; other browsers cannot, unless registered inside first.
 
 ## What it can do
 
 
-- After login (tested with Office 365 OAuth), a confirmation page asks "Log in on this device?" — the user presses **Yes**
+
+- After login (any login method; developed with Office 365 OAuth), a confirmation page asks "Log in on this device?" — the user presses **Yes**
 - The browser signs a one-time server challenge with an **ECDSA P-256 key** created by WebCrypto
   with `extractable: false` and stored in IndexedDB; the server keeps only the public key
 - A device is recognized only when **both** the HttpOnly cookie (device id) **and** the key in IndexedDB are present
 - New devices can be registered only from **configured networks** (`device_mfa_register_networks`)
-- Outside those networks: either rely on the identity provider's MFA (`'idp'`, default) or allow registered devices only (`'deny'`)
+- Outside those networks: allow registered devices only (`'deny'`, default) or rely on the identity provider's MFA (`'idp'`)
 - Until the check passes, every request except logout is blocked (AJAX/iframe requests get 401)
 - Each user can choose the strength in **Settings → 端末確認 (Device check)**:
   - **Standard**: inside the allowed network, a new device is registered by pressing Yes
@@ -56,8 +78,8 @@ chown root:apache /etc/roundcubemail/device_mfa.inc.php && chmod 640 /etc/roundc
 ```
 Add `'device_mfa'` to `$config['plugins']`.
 
-> **Set `device_mfa_register_networks` before enabling the plugin.** If it is empty and
-> `device_mfa_outside_mode` is `'deny'`, nobody can register a device.
+> **Set `device_mfa_register_networks` before enabling the plugin.** If it is empty (with the default `'deny'`),
+> nobody can register a device and nobody can log in.
 
 Upgrading from a version without the strict mode: run `SQL/mysql/2026110501.sql`.
 
@@ -75,7 +97,7 @@ Log: `logs/device_mfa.log` (`/var/log/roundcubemail/device_mfa.log` with the RPM
 ## How it works
 
 ```
-login (OAuth) ─▶ login_after: reset "verified" flag
+login (any) ──▶ login_after: reset "verified" flag
                ─▶ startup hook: not verified?
                     ├─ outside register networks and mode 'idp' → verified (IdP MFA)
                     └─ otherwise → confirmation page with a 32-byte challenge (5 min, single use)
@@ -138,17 +160,34 @@ Roundcube のログイン後に**端末の確認**を追加するプラグイン
 | 接続元の IP | 端末確認 | 第2の確認を行うもの |
 |---|---|---|
 | `device_mfa_register_networks` の中（例：院内 LAN） | **ON**：確認画面を表示し、端末を登録・確認する | このプラグイン（ネットワーク＋端末の鍵） |
-| 外側で、`device_mfa_outside_mode = 'idp'`（既定） | **OFF**：確認画面を出さない | ID プロバイダーの多要素認証（例：Entra ID の条件付きアクセス） |
-| 外側で、`device_mfa_outside_mode = 'deny'` | **ON**：登録済み端末だけ許可し、新しい登録は拒否 | このプラグイン（端末の鍵） |
+| 外側で、`device_mfa_outside_mode = 'deny'`（既定） | **ON**：登録済み端末だけ許可し、新しい登録は拒否 | このプラグイン（端末の鍵） |
+| 外側で、`device_mfa_outside_mode = 'idp'` | **OFF**：確認画面を出さない | ID プロバイダーの多要素認証（例：Entra ID の条件付きアクセス） |
 
 接続元の IP は `REMOTE_ADDR` を使います。`X-Forwarded-For` は、`proxy_whitelist` に入っているプロキシ経由のときだけ信用します。
+
+### Office 365 は必要？
+**不要です。** このプラグインは Office 365 を一切使いません。Roundcube にログインした後に動くので、普通のパスワードでのログイン（Dovecot や Postfix などのメールサーバー）でも同じように使えます。Office 365 の名前が出てくるのは、Office 365 でログインする Roundcube で開発したためです。
+
+`device_mfa_outside_mode` は、利用者のログイン方法に合わせて選んでください。
+
+| ログイン方法 | `device_mfa_outside_mode` | 許可ネットワークの外からのアクセス |
+|---|---|---|
+| 普通のパスワード（ID プロバイダーなし）— **ほとんどの環境** | **`'deny'`**（既定） | 院内で登録した端末だけがログインできる。パスワードだけでは入れない |
+| Office 365 など、**外からは多要素認証を求める** ID プロバイダー（例：Entra ID の条件付きアクセス） | `'idp'` | 端末確認をせず、ID プロバイダーの多要素認証を第2の確認とする |
+
+> ID プロバイダー側で多要素認証をしていないのに `'idp'` にすると、外からはパスワードだけで入れてしまいます。Roundcube からは ID プロバイダーが多要素認証をしたかどうかを確認できないので、確実に設定されている場合だけ `'idp'` を使ってください。
+
+パスワードでログインする環境での、典型的な使い方：
+1. `device_mfa_register_networks` に院内（社内）のネットワークを設定する（Roundcube から見える NAT のアドレスも）
+2. 利用者は一度**院内から**ログインし、「はい」を押す。これでそのブラウザが登録される
+3. 以後、そのブラウザは院外からもログインできる。ほかのブラウザは、院内で登録しない限りログインできない
 
 ### できること
 - ログイン後に「この端末でログインしますか？」と表示し、利用者が「はい」を押す
 - ブラウザが WebCrypto で作った ECDSA P-256 の鍵（`extractable: false`、IndexedDB に保存）で、サーバーの使い捨てコードに署名する。サーバーは公開鍵だけを保存する
 - HttpOnly の Cookie（端末ID）と IndexedDB の鍵が**両方そろったとき**だけ、登録済みの端末とみなす
 - 新しい端末を登録できるのは、設定したネットワーク（`device_mfa_register_networks`）からだけ
-- それ以外のネットワークからは、ID プロバイダーの多要素認証に任せる（`'idp'`、既定）か、登録済み端末だけを許可する（`'deny'`）
+- それ以外のネットワークからは、登録済み端末だけを許可する（`'deny'`、既定）か、ID プロバイダーの多要素認証に任せる（`'idp'`）
 - 確認が済むまで、ログアウト以外の操作はすべて遮断する
 - 利用者は「設定 > 端末確認」で強さを選べる
   - **標準**：許可したネットワークの中なら、「はい」で新しい端末を登録
@@ -156,7 +195,7 @@ Roundcube のログイン後に**端末の確認**を追加するプラグイン
 - 利用者は自分の端末の一覧表示と削除ができる。管理者向けにはコマンド（`bin/device_mfa_admin.php`）がある
 
 ### 導入
-上の Installation を参照してください。**有効にする前に `device_mfa_register_networks` を設定してください。** 空のままで `device_mfa_outside_mode` が `'deny'` だと、誰も端末を登録できません。
+上の Installation を参照してください。**有効にする前に `device_mfa_register_networks` を設定してください。** 空のままだと（既定の `'deny'` では）、誰も端末を登録できず、ログインできなくなります。
 
 ### 防げること
 - **Cookie だけ**を盗まれても、秘密鍵がないと使えない（逆も同じ）

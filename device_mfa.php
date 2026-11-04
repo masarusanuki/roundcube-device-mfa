@@ -68,11 +68,12 @@ class device_mfa extends rcube_plugin
             return $args;
         }
 
-        // 院外 (登録許可ネットワーク外) からのアクセスは端末確認を行わず、
-        // Microsoft Entra ID 側の通常の多要素認証 (条件付きアクセス) に任せる
+        // 登録許可ネットワークの外からのアクセスで、device_mfa_outside_mode が 'idp' のときだけ、
+        // 端末確認を行わず ID プロバイダー（例：Entra ID の条件付きアクセス）の多要素認証に任せる。
+        // 既定の 'deny' では、外からも端末確認を行う（登録済みの端末だけ通す）
         $ip = rcube_utils::remote_addr();
         if (!$this->registration_allowed($ip)
-            && $this->rc->config->get('device_mfa_outside_mode', 'idp') === 'idp'
+            && $this->rc->config->get('device_mfa_outside_mode', 'deny') === 'idp'
         ) {
             $this->mark_ok();
             $this->log("outside network: device check skipped (IdP MFA) user_id={$_SESSION['user_id']} ip={$ip}");
