@@ -15,6 +15,21 @@ $config['device_mfa_register_networks'] = [
 // この日数使われなかった端末は無効扱い（0 = 無期限）
 $config['device_mfa_expire_days'] = 180;
 
+// Strengths users can choose in Settings > Device check. 'standard' is always available.
+//   ['standard']                         : network (IP) + confirmation page only; no choice shown
+//   ['standard', 'strict']               : + approval by a registered device
+//   ['standard', 'strict', 'webauthn']   : + security key / Windows Hello (default)
+// 利用者が選べる強さ。'standard'（IP アドレス＋確認画面）は常に使える。
+// ['standard'] にすると、ほかの選択肢と確認画面の「自分の端末での多要素認証」は表示されない。
+$config['device_mfa_modes'] = ['standard', 'strict', 'webauthn'];
+
+// Security key / Windows Hello (WebAuthn). Normally leave unset: the host name and URL the user opened are used.
+// Set them only if Roundcube is behind a reverse proxy that changes the host name.
+// セキュリティキー・Windows Hello（WebAuthn）。通常は設定不要（利用者が開いたホスト名と URL を使う）。
+// ホスト名を書き換えるリバースプロキシの後ろに置く場合だけ設定する。
+// $config['device_mfa_webauthn_rp_id'] = 'mail.example.org';
+// $config['device_mfa_webauthn_origin'] = 'https://mail.example.org';
+
 // Cookie that holds the device id / 端末IDを保持する Cookie の名前
 $config['device_mfa_cookie_name'] = 'rc_device_mfa';
 

@@ -1,26 +1,36 @@
 # device_mfa — device-bound second check for Roundcube (no phone needed)
 
-A Roundcube plugin that adds a **device check after login**: the browser proves, with a non-extractable
-key created on first use, that it is a device registered for this user. Designed for places where
+A Roundcube plugin that adds a **device check after login**. Designed for places where
 **mobile phones cannot be used** (e.g. hospitals), so app/SMS based MFA is not an option.
+Users choose one of three strengths:
+
+| Strength | What is checked after the password | |
+|---|---|---|
+| **Standard** | the network (IP address) + a key stored in this browser | default |
+| **Strict** | as Standard, but a new device must be approved on an already registered device | |
+| **Security key / Windows Hello** | a FIDO2 security key or Windows Hello (WebAuthn) on every login | **real two-factor authentication** |
+
+Administrators decide which strengths are offered with `device_mfa_modes` — e.g. `['standard']` for
+"network + confirmation page only" with no choice shown to users.
 
 *日本語の説明は下にあります。*
 
-> **What this is, and what it is not.** Inside the allowed network, this plugin checks
-> *the network the user is on* and *the browser profile they use*, in addition to the password.
-> That is **not a formal multi-factor authentication** (network and device are not "something you have"
-> in the strict sense, and the browser profile could be copied). Read [Security model](#security-model) before using it.
+> **What Standard and Strict are, and what they are not.** They check *the network the user is on* and
+> *the browser profile they use*, in addition to the password. That is **not a formal multi-factor
+> authentication** (network and browser are not "something you have" in the strict sense, and a browser
+> profile could be copied). The **Security key / Windows Hello** strength is. Read [Security model](#security-model).
 
 ## On/off by IP address
 
-The device check is switched **on or off by the client's IP address**:
+The device check (Standard / Strict) is switched **on or off by the client's IP address**:
 
 | Client IP | Device check | Second check done by |
 |---|---|---|
-| inside `device_mfa_register_networks` (e.g. the hospital LAN) | **ON** — confirmation page, register / verify the device | this plugin (network + device key) |
-| outside, `device_mfa_outside_mode = 'deny'` (default) | **ON** — only registered devices; new registration refused | this plugin (device key) |
+| inside `device_mfa_register_networks` (e.g. the hospital LAN) | **ON** — confirmation page, register / verify the device | this plugin (network + browser key) |
+| outside, `device_mfa_outside_mode = 'deny'` (default) | **ON** — only registered devices; new registration refused | this plugin (browser key) |
 | outside, `device_mfa_outside_mode = 'idp'` | **OFF** — no confirmation page | the identity provider's MFA (e.g. Entra ID Conditional Access) |
 
+Users who chose **Security key / Windows Hello** are always checked, inside and outside.
 The client IP is `REMOTE_ADDR`, or `X-Forwarded-For` only when the request comes from a proxy listed in `proxy_whitelist`.
 
 ## Do I need Office 365?
@@ -46,25 +56,26 @@ Typical flow for a password-only installation:
 
 ## What it can do
 
-
-
-- After login (any login method; developed with Office 365 OAuth), a confirmation page asks "Log in on this device?" — the user presses **Yes**
-- The browser signs a one-time server challenge with an **ECDSA P-256 key** created by WebCrypto
-  with `extractable: false` and stored in IndexedDB; the server keeps only the public key
-- A device is recognized only when **both** the HttpOnly cookie (device id) **and** the key in IndexedDB are present
-- New devices can be registered only from **configured networks** (`device_mfa_register_networks`)
-- Outside those networks: allow registered devices only (`'deny'`, default) or rely on the identity provider's MFA (`'idp'`)
+- After login (any login method), a confirmation page asks "Log in on this device?" — the user presses **Yes**
+- **Browser key**: the browser signs a one-time server challenge with an **ECDSA P-256 key** created by WebCrypto
+  with `extractable: false` and stored in IndexedDB; the server keeps only the public key.
+  The device id is kept in an HttpOnly cookie **and** next to the key, so a lost cookie is restored automatically
+  (the key's signature is still required)
+- **Security key / Windows Hello (WebAuthn)**: users register FIDO2 security keys (USB/NFC) or Windows Hello in Settings
+  and then confirm every login with them. ES256 and RS256 keys are supported; the signature counter is checked
+- New browsers can be registered only from **configured networks** (`device_mfa_register_networks`)
 - Until the check passes, every request except logout is blocked (AJAX/iframe requests get 401)
-- Each user can choose the strength in **Settings → 端末確認 (Device check)**:
-  - **Standard**: inside the allowed network, a new device is registered by pressing Yes
-  - **Strict (multi-factor)**: a new device shows an approval code (e.g. `9JB6-J34Q`) and must be approved
-    from one of the user's already registered devices within 15 minutes
-- Users can list and delete their own devices; admins have a CLI (`bin/device_mfa_admin.php`)
+- **Settings → Device check**: choose the strength, register security keys, approve waiting devices (Strict), list and delete devices
+- On the confirmation page, "Use multi-factor with my own device" switches Standard → Strict (never weaker)
+- **Languages**: English and Japanese (follows the user's language; others fall back to English)
+- **Databases**: MySQL/MariaDB, PostgreSQL, SQLite
+- Admin CLI: list, revoke, reset a user who lost a key
 
 ## Requirements
 
-- Roundcube 1.7 (tested with 1.7.5, PHP 8.4), MySQL/MariaDB
-- HTTPS (WebCrypto and `Secure` cookies require it)
+- Roundcube 1.7 (tested with 1.7.5, PHP 8.4)
+- MySQL/MariaDB, PostgreSQL or SQLite
+- HTTPS (WebCrypto, WebAuthn and `Secure` cookies require it)
 - If a reverse proxy is in front of Roundcube, add it to `proxy_whitelist`, otherwise the network check sees the proxy address
 
 ## Installation
@@ -72,7 +83,10 @@ Typical flow for a password-only installation:
 ```bash
 cd /usr/share/roundcubemail/plugins
 git clone https://github.com/masarusanuki/roundcube-device-mfa.git device_mfa
+# create the table (choose your database)
 mysql roundcubemail < device_mfa/SQL/mysql.initial.sql
+#   psql roundcubemail < device_mfa/SQL/postgres.initial.sql
+#   sqlite3 /path/to/roundcube.db < device_mfa/SQL/sqlite.initial.sql
 cp device_mfa/config.inc.php.dist /etc/roundcubemail/device_mfa.inc.php    # edit device_mfa_register_networks
 chown root:apache /etc/roundcubemail/device_mfa.inc.php && chmod 640 /etc/roundcubemail/device_mfa.inc.php
 ```
@@ -81,65 +95,75 @@ Add `'device_mfa'` to `$config['plugins']`.
 > **Set `device_mfa_register_networks` before enabling the plugin.** If it is empty (with the default `'deny'`),
 > nobody can register a device and nobody can log in.
 
-Upgrading from a version without the strict mode: run `SQL/mysql/2026110501.sql`.
+**Upgrading (MySQL)**: from v1.0 run `SQL/mysql/2026110501.sql` (if not yet) and `SQL/mysql/2026110601.sql`.
 
 Web server examples (nginx / Apache, with PATH_INFO for the OAuth callback): [`examples/`](examples/).
+Behind a reverse proxy that changes the host name, set `device_mfa_webauthn_rp_id` / `device_mfa_webauthn_origin`.
 
 ### Admin CLI
 ```bash
 bin/device_mfa_admin.php list [username]
 bin/device_mfa_admin.php revoke <id>
 bin/device_mfa_admin.php revoke-user <username>
+bin/device_mfa_admin.php reset-user <username>    # lost security key: revoke all, strength back to Standard
 # Roundcube in another place: RC_DIR=/var/www/roundcube bin/device_mfa_admin.php list
 ```
-Log: `logs/device_mfa.log` (`/var/log/roundcubemail/device_mfa.log` with the RPM).
+Log: `logs/device_mfa.log` (`/var/log/roundcubemail/device_mfa.log` with the RPM). Re-registrations are logged
+with the reason (`reason=no_key|server_unregistered cookie=yes|no`), and restored cookies as `cookie RESTORED`.
 
 ## How it works
 
 ```
 login (any) ──▶ login_after: reset "verified" flag
-               ─▶ startup hook: not verified?
-                    ├─ outside register networks and mode 'idp' → verified (IdP MFA)
-                    └─ otherwise → confirmation page with a 32-byte challenge (5 min, single use)
-browser: "Yes" ─▶ key in IndexedDB?
-                    ├─ yes → sign challenge → POST verify (sig + cookie) → server checks with stored public key
-                    └─ no  → generate key (non-extractable) → POST register (public key + sig)
-                              ├─ standard (or no other device) → active
-                              └─ strict → pending + approval code → approved on a registered device → active
+              ─▶ startup hook: not verified?
+                   ├─ strength = security key → WebAuthn page (inside and outside)
+                   ├─ outside register networks and mode 'idp' → verified (IdP MFA)
+                   └─ otherwise → confirmation page with a 32-byte challenge (5 min, single use)
+browser key:  key in IndexedDB?
+                   ├─ yes → sign → POST verify (sig + cookie or stored device id) → check with stored public key
+                   └─ no  → generate key (non-extractable) → POST register (public key + sig)
+                             ├─ Standard (or no other device) → active
+                             └─ Strict → pending + approval code → approved on a registered device → active
+WebAuthn:     navigator.credentials.get (allowCredentials) → POST → verify clientData, rpIdHash, flags,
+              counter and signature over authenticatorData ‖ SHA-256(clientDataJSON)
 ```
 
 | Part | Implementation |
 |---|---|
 | Gate | `startup` hook; the "verified" flag is an HMAC bound to the session id and user id |
 | Challenge | 32 random bytes, valid 5 minutes, removed from the session before verification (replay protection) |
-| Signature | WebCrypto ECDSA P-256/SHA-256 (`r‖s`) converted to DER and checked with `openssl_verify` |
-| Public key | SPKI from the browser, curve must be `prime256v1`; registration requires a signature (proof of possession) |
+| Browser key | WebCrypto ECDSA P-256/SHA-256 (`r‖s`) → DER → `openssl_verify`; SPKI must be `prime256v1`; registration requires a signature |
+| WebAuthn | `lib/device_mfa_webauthn.php`: small CBOR decoder, COSE (ES256/RS256) → PEM, attestation `none` (statement not verified), origin / rpId / UP flag / counter checks |
 | Cookie | `Secure`, `HttpOnly`, `SameSite=Lax`, 400 days, extended on each successful check |
 | IndexedDB key name | HMAC of the user id (no e-mail address stored in clear on the device) |
 | API | `POST` only, Roundcube request token in `X-Roundcube-Request` (CSRF) |
 | Page | `X-Frame-Options: DENY`, `Cache-Control: no-store` |
-| Data | table `device_mfa_devices` (public key, browser, created/last used time and IP, status, revoked) |
+| Data | table `device_mfa_devices` (kind, public key, credential id, counter, name, browser, created/last used time and IP, status, revoked) |
+| Pending expiry | evaluated by the database (`created > now - 15 min`), so it works with any database clock / time zone |
 
 ## Security model
 
 What it helps against:
-- A stolen **cookie alone** is useless without the private key, and vice versa
-- **Replay** of a captured response (one-time, short-lived challenge)
+- A stolen **cookie alone** is useless without the private key
+- **Replay** of a captured response (one-time, short-lived challenge; WebAuthn signature counter)
 - A leaked **database** (only public keys are stored)
-- In strict mode: a stolen password used **from inside** the allowed network cannot register a new device
+- In Strict: a stolen password used **from inside** the allowed network cannot register a new device
+- With **Security key / Windows Hello**: a stolen password is useless without the key, from anywhere; phishing sites
+  cannot use the key (WebAuthn is bound to the origin); a personal USB key also works on **shared PCs**
 
 What it does **not** guarantee:
-- In standard mode, anyone with the password **inside the allowed network** can register a device
-- It identifies a **browser profile**, not hardware; copying the whole profile may copy the key
-- On **shared PCs** it identifies the PC, not the person
-- PCs that wipe browser data at logoff (or private windows) lose the key every time, so the check degrades to a network check
+- In Standard, anyone with the password **inside the allowed network** can register a browser
+- Browser keys identify a **browser profile**, not hardware; copying the whole profile may copy the key
+- On **shared PCs**, browser keys identify the PC, not the person (use personal security keys there)
+- PCs that wipe browser data at logoff (or private windows) lose the browser key every time
 - Outside the allowed network with `'idp'`, security depends on the identity provider's MFA (Roundcube cannot verify it was performed)
+- The WebAuthn attestation statement is not verified (any FIDO2 authenticator is accepted)
 
-## Limitations / TODO
+## Limitations
 
-- UI strings are Japanese only (no localization files yet)
-- MySQL/MariaDB only (no PostgreSQL/SQLite schema yet)
-- Under investigation: one report of the device cookie not being kept between logins (the same browser was registered several times)
+- WebAuthn and PostgreSQL were tested with generated test data and a schema review only:
+  please report results with real security keys / Windows Hello and real PostgreSQL servers
+- Approval by a registered device (Strict) needs the user to have another registered device
 
 ## License
 
@@ -149,20 +173,29 @@ GPL-3.0-or-later
 
 ## 日本語
 
-Roundcube のログイン後に**端末の確認**を追加するプラグインです。初回にブラウザ内で作った「取り出し不可」の鍵で、登録済みの端末であることを確かめます。
-病院など**携帯電話を使えない場所**で、アプリや SMS による多要素認証の代わりに使うことを想定しています。
+Roundcube のログイン後に**端末の確認**を追加するプラグインです。病院など**携帯電話を使えない場所**で、アプリや SMS による多要素認証の代わりに使うことを想定しています。
+利用者は3つの強さから選べます。
 
-> **このプラグインでできること・できないこと**：許可したネットワークの中では、パスワードに加えて「どのネットワークから」「どのブラウザで」使っているかを確認します。これは**正式な多要素認証ではありません**（ネットワークや端末は、厳密な意味での「持っているもの」ではなく、ブラウザのプロファイルは複製できる可能性があります）。使う前に上の「Security model」を確認してください。
+| 強さ | パスワードに加えて確認するもの | |
+|---|---|---|
+| **標準** | ネットワーク（IP アドレス）＋このブラウザに保存した鍵 | 既定 |
+| **強化** | 標準と同じ。ただし新しい端末は、登録済みの端末での承認が必要 | |
+| **セキュリティキー・Windows Hello** | ログインのたびに FIDO2 のセキュリティキーか Windows Hello（WebAuthn） | **正式な二要素認証** |
+
+管理者は `device_mfa_modes` で、利用者に見せる強さを絞れます。たとえば `['standard']` にすると「IP アドレス＋確認画面」だけになり、選択肢は表示されません。
+
+> **標準と強化について**：パスワードに加えて「どのネットワークから」「どのブラウザで」使っているかを確認します。これは**正式な多要素認証ではありません**（ネットワークやブラウザは、厳密な意味での「持っているもの」ではなく、ブラウザのプロファイルは複製できる可能性があります）。「セキュリティキー・Windows Hello」は正式な二要素認証です。
 
 ### IP アドレスで ON/OFF
-端末確認は、**接続元の IP アドレスで ON/OFF が切り替わります**。
+端末確認（標準・強化）は、**接続元の IP アドレスで ON/OFF が切り替わります**。
 
 | 接続元の IP | 端末確認 | 第2の確認を行うもの |
 |---|---|---|
-| `device_mfa_register_networks` の中（例：院内 LAN） | **ON**：確認画面を表示し、端末を登録・確認する | このプラグイン（ネットワーク＋端末の鍵） |
-| 外側で、`device_mfa_outside_mode = 'deny'`（既定） | **ON**：登録済み端末だけ許可し、新しい登録は拒否 | このプラグイン（端末の鍵） |
+| `device_mfa_register_networks` の中（例：院内 LAN） | **ON**：確認画面を表示し、端末を登録・確認する | このプラグイン（ネットワーク＋ブラウザの鍵） |
+| 外側で、`device_mfa_outside_mode = 'deny'`（既定） | **ON**：登録済み端末だけ許可し、新しい登録は拒否 | このプラグイン（ブラウザの鍵） |
 | 外側で、`device_mfa_outside_mode = 'idp'` | **OFF**：確認画面を出さない | ID プロバイダーの多要素認証（例：Entra ID の条件付きアクセス） |
 
+「セキュリティキー・Windows Hello」を選んだ利用者は、院内・院外を問わず毎回確認します。
 接続元の IP は `REMOTE_ADDR` を使います。`X-Forwarded-For` は、`proxy_whitelist` に入っているプロキシ経由のときだけ信用します。
 
 ### Office 365 は必要？
@@ -184,28 +217,36 @@ Roundcube のログイン後に**端末の確認**を追加するプラグイン
 
 ### できること
 - ログイン後に「この端末でログインしますか？」と表示し、利用者が「はい」を押す
-- ブラウザが WebCrypto で作った ECDSA P-256 の鍵（`extractable: false`、IndexedDB に保存）で、サーバーの使い捨てコードに署名する。サーバーは公開鍵だけを保存する
-- HttpOnly の Cookie（端末ID）と IndexedDB の鍵が**両方そろったとき**だけ、登録済みの端末とみなす
-- 新しい端末を登録できるのは、設定したネットワーク（`device_mfa_register_networks`）からだけ
-- それ以外のネットワークからは、登録済み端末だけを許可する（`'deny'`、既定）か、ID プロバイダーの多要素認証に任せる（`'idp'`）
+- **ブラウザの鍵**：WebCrypto で作った ECDSA P-256 の鍵（`extractable: false`、IndexedDB に保存）で、サーバーの使い捨てコードに署名する。サーバーは公開鍵だけを保存する。端末IDは HttpOnly の Cookie と、鍵の隣の両方に保存するので、Cookie だけが消えても自動で戻る（鍵の署名は必ず必要）
+- **セキュリティキー・Windows Hello（WebAuthn）**：利用者が設定画面で FIDO2 のセキュリティキー（USB・NFC）や Windows Hello を登録し、ログインのたびにそれで確認する。ES256 と RS256 に対応し、署名カウンターも確認する
+- 新しいブラウザを登録できるのは、設定したネットワーク（`device_mfa_register_networks`）からだけ
 - 確認が済むまで、ログアウト以外の操作はすべて遮断する
-- 利用者は「設定 > 端末確認」で強さを選べる
-  - **標準**：許可したネットワークの中なら、「はい」で新しい端末を登録
-  - **強化（多要素）**：新しい端末に承認コードを表示し、本人の登録済み端末で15分以内に承認する
-- 利用者は自分の端末の一覧表示と削除ができる。管理者向けにはコマンド（`bin/device_mfa_admin.php`）がある
+- **設定 > 端末確認**：強さの選択、セキュリティキーの登録、承認待ちの端末の承認（強化）、端末の一覧表示と削除
+- 確認画面の「自分の端末での多要素認証を使う」で、標準 → 強化に切り替えられる（弱める方向は不可）
+- **言語**：英語・日本語（利用者の言語設定に合わせる。その他の言語は英語）
+- **データベース**：MySQL/MariaDB、PostgreSQL、SQLite
+- 管理者向けのコマンド：一覧、失効、キーをなくした利用者のリセット
 
 ### 導入
 上の Installation を参照してください。**有効にする前に `device_mfa_register_networks` を設定してください。** 空のままだと（既定の `'deny'` では）、誰も端末を登録できず、ログインできなくなります。
+MySQL で以前の版から更新する場合は、`SQL/mysql/2026110501.sql`（未実行なら）と `SQL/mysql/2026110601.sql` を実行してください。
+キーをなくした利用者は、管理者が `bin/device_mfa_admin.php reset-user <利用者>` で全端末を失効させ、強さを「標準」に戻せます。
 
 ### 防げること
-- **Cookie だけ**を盗まれても、秘密鍵がないと使えない（逆も同じ）
-- 通信を記録して**再送**されても、使い捨てで短時間しか有効でないコードなので通らない
+- **Cookie だけ**を盗まれても、秘密鍵がないと使えない
+- 通信を記録して**再送**されても、使い捨てで短時間しか有効でないコード（WebAuthn では署名カウンターも）なので通らない
 - **データベース**が漏れても、保存しているのは公開鍵だけなので、端末になりすませない
-- 強化モードでは、パスワードを盗まれても、**許可したネットワークの中から**新しい端末を登録されない
+- 強化では、パスワードを盗まれても、**許可したネットワークの中から**新しい端末を登録されない
+- **セキュリティキー・Windows Hello** では、どこからでも、キーがなければパスワードだけでは入れない。偽サイトではキーが使えない（WebAuthn はサイトのアドレスに結び付く）。個人の USB キーなら**共用 PC**でも本人の確認になる
 
 ### 保証できないこと
-- 標準モードでは、許可したネットワークの中にいれば、パスワードを知っている人は誰でも端末を登録できる
-- 確認できるのはブラウザのプロファイルで、ハードウェアではない（プロファイルを丸ごと複製すると鍵も移る可能性がある）
-- 共用 PC では「人」ではなく「PC」の確認になる
-- ログオフ時にブラウザのデータを消す PC やプライベートウィンドウでは、毎回鍵が消えるため、実質的にネットワークの確認だけになる
+- 標準では、許可したネットワークの中にいれば、パスワードを知っている人は誰でもブラウザを登録できる
+- ブラウザの鍵で確認できるのはブラウザのプロファイルで、ハードウェアではない（プロファイルを丸ごと複製すると鍵も移る可能性がある）
+- 共用 PC では、ブラウザの鍵は「人」ではなく「PC」の確認になる（共用 PC では個人のセキュリティキーを使う）
+- ログオフ時にブラウザのデータを消す PC やプライベートウィンドウでは、毎回ブラウザの鍵が消える
 - ネットワークの外で `'idp'` の場合、安全性は ID プロバイダーの多要素認証に依存する（Roundcube からは実施されたかを確認できない）
+- WebAuthn の構成証明（attestation）は検証しない（どの FIDO2 の認証器でも受け付ける）
+
+### 制限
+- WebAuthn と PostgreSQL は、テスト用に作ったデータとテーブル定義の確認でしか試していません。実際のセキュリティキー・Windows Hello や PostgreSQL での結果を教えていただけると助かります
+- 強化での承認には、ほかに登録済みの端末が必要です
